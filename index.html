@@ -81,11 +81,47 @@
         function binomialCDF(k, n, p) {
             if (k < 0) return 0;
             if (k >= n) return 1;
-            let sum = 0;
-            for (let i = 0; i <= k; i++) {
-                sum += Math.exp(logBinomial(n, i) + i * Math.log(p) + (n - i) * Math.log(1 - p));
+            if (p <= 0) return 1;
+            if (p >= 1) return 0;
+
+            let useComplement = false;
+            let kk = k;
+            let pp = p;
+            if (k > Math.floor(n / 2)) {
+                useComplement = true;
+                kk = n - k - 1;
+                pp = 1 - p;
             }
-            return sum;
+
+            const qq = 1 - pp;
+            let term = Math.pow(qq, n); // P(X = 0)
+            let sum = term;
+            for (let i = 0; i < kk; i++) {
+                term *= ((n - i) / (i + 1)) * (pp / qq);
+                sum += term;
+            }
+
+            const cdf = useComplement ? 1 - sum : sum;
+            return Math.min(1, Math.max(0, cdf));
+        }
+
+        function findMinN({ predicate, maxN = 100000 }) {
+            if (predicate(1)) return 1;
+            let lo = 1;
+            let hi = 2;
+            while (hi < maxN && !predicate(hi)) {
+                lo = hi;
+                hi *= 2;
+            }
+            hi = Math.min(hi, maxN);
+            if (!predicate(hi)) return maxN;
+
+            while (lo + 1 < hi) {
+                const mid = Math.floor((lo + hi) / 2);
+                if (predicate(mid)) hi = mid;
+                else lo = mid;
+            }
+            return hi;
         }
 
         function clopper_pearson_bounds(n, p, a) {
@@ -144,17 +180,23 @@
                     const a_tail = getAlphaTail(alpha2, sides2);
                     const z = qnorm(1 - a_tail);
                     const n_wald = Math.ceil((z * z * p_exp * (1 - p_exp)) / (d * d));
-                    let n_wilson = 1;
-                    while (wilson_precision(n_wilson, p_exp, a_tail) > d && n_wilson < 10000) n_wilson++;
-                    let n_cp = 1;
-                    while (clopper_pearson_precision(n_cp, p_exp, a_tail) > d && n_cp < 10000) n_cp++;
+                    const n_wilson = findMinN({
+                        predicate: (n) => wilson_precision(n, p_exp, a_tail) <= d,
+                        maxN: 100000
+                    });
+                    const n_cp = findMinN({
+                        predicate: (n) => clopper_pearson_precision(n, p_exp, a_tail) <= d,
+                        maxN: 100000
+                    });
                     return { n_wald, n_wilson, n_cp, final_n: method2 === 'wald' ? n_wald : method2 === 'wilson' ? n_wilson : n_cp };
                 } else {
                     const { n_cases_step2, prevalence, expected_spec, spec_lower_bound, alpha3, sides3 } = params;
                     const a_tail = getAlphaTail(alpha3, sides3);
                     const n_total_for_cases = Math.ceil(n_cases_step2 / prevalence);
-                    let n_healthy_needed = 1;
-                    while (wilson_lb(n_healthy_needed, expected_spec, a_tail) < spec_lower_bound && n_healthy_needed < 10000) n_healthy_needed++;
+                    const n_healthy_needed = findMinN({
+                        predicate: (n) => wilson_lb(n, expected_spec, a_tail) >= spec_lower_bound,
+                        maxN: 100000
+                    });
                     const n_total_for_spec = Math.ceil(n_healthy_needed / (1 - prevalence));
                     return { n_total: Math.max(n_total_for_cases, n_total_for_spec), n_healthy_needed, n_diseased_needed: n_cases_step2, n_total_for_cases, n_total_for_spec };
                 }
