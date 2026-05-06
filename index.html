@@ -78,16 +78,16 @@
                 // Shared params
                 alpha: 0.05,
                 // Comprehensive params
-                p_exp: 0.17,
-                p_min: 0.10,
+                p_exp: 0.36,
+                p_min: 0.30,
                 d: 0.05,
                 power: 0.80,
-                incidence: 5.94 / 100000,
+                incidence: 2/ 10000,
                 specificity: 0.994,
                 spec_floor: 0.990,
                 // Detection params
-                det_incidence: 12 / 100000,
-                det_sensitivity: 0.17,
+                det_incidence: 2/ 10000,
+                det_sensitivity: 0.36,
                 det_method: 'poisson' // 'poisson' or 'binomial'
             });
 
@@ -226,11 +226,11 @@
                                             <input type="number" step="0.001" name="alpha" value={params.alpha} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Sensitivity (p_exp)</label>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Sensitivity</label>
                                             <input type="number" step="0.001" name="p_exp" value={params.p_exp} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-700 mb-1">Minimal Floor (p_min)</label>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Minimal Sensitivity</label>
                                             <input type="number" step="0.001" name="p_min" value={params.p_min} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
@@ -238,7 +238,7 @@
                                             <input type="number" step="0.001" name="specificity" value={params.specificity} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-700 mb-1">Specificity Floor</label>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Minimal Specificity</label>
                                             <input type="number" step="0.001" name="spec_floor" value={params.spec_floor} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
@@ -257,11 +257,11 @@
                                 ) : (
                                     <React.Fragment>
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-700 mb-1">Alpha (Error rate)</label>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Alpha (e.g., 0.05 for 95% CI)</label>
                                             <input type="number" step="0.001" name="alpha" value={params.alpha} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-slate-700 mb-1">Sensitivity</label>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Sensitivity</label>
                                             <input type="number" step="0.001" name="det_sensitivity" value={params.det_sensitivity} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
                                         </div>
                                         <div>
