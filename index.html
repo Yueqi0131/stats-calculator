@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sample Size Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Statistical Helper Functions ---
+        
+        // Quantile function for normal distribution (qnorm)
+        // Uses the Witcher-Wichura approximation for high precision
+        function qnorm(p) {
+            if (p <= 0 || p >= 1) return NaN;
+            
+            // Rational approximation for the inverse normal cumulative distribution function
+            const a = [-3.969683028665376e+01,  2.209460984245205e+02, -2.759285104469687e+02,  1.383577518672690e+02, -3.066479806614716e+01,  2.506628277459239e+00];
+            const b = [-5.447609879822406e+01,  1.615858368580409e+02, -1.556989798598866e+02,  6.680131188771972e+01, -1.328068155288572e+01];
+            const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732739351735e+00,  4.374664141464968e+00,  2.938163982698783e+00];
+            const d = [ 7.784695709041462e-03,  3.224671290700398e-01,  2.445134137142996e+00,  3.754408661907416e+00];
+            
+            const low = 0.02425;
+            const high = 1 - low;
+            
+            if (p < low) {
+                const q = Math.sqrt(-2 * Math.log(p));
+                return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+                       ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1) * -1; // Negative for left tail
+            } else if (p > high) {
+                const q = Math.sqrt(-2 * Math.log(1 - p));
+                return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+                       ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); // Positive for right tail
+            } else {
+                const q = p - 0.5;
+                const r = q * q;
+                return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+                       (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+            }
+        }
+
+        function wilson_bounds(n, p, a) {
+            if (p < 0) p = 0;
+            if (p > 1) p = 1;
+            const z = qnorm(1 - a); // e.g., qnorm(0.975) for 95% 2-sided
+            const z2 = z * z;
+            const common = z * Math.sqrt(z2 + 4 * n * p * (1 - p));
+            const lb = (2 * n * p + z2 - common) / (2 * (n + z2));
+            const ub = (2 * n * p + z2 + common) / (2 * (n + z2));
+            return { lb, ub };
+        }
+
+        function wilson_lb(n, p, a) {
+            return wilson_bounds(n, p, a).lb;
+        }
+
+        function wilson_precision(n, p, a) {
+            const { lb, ub } = wilson_bounds(n, p, a);
+            return Math.max(p - lb, ub - p);
+        }
+
+        const App = () => {
+            const [mode, setMode] = useState('comprehensive'); // 'comprehensive' or 'detection'
+            const [params, setParams] = useState({
+                // Shared params
+                alpha: 0.05,
+                // Comprehensive params
+                p_exp: 0.17,
+                p_min: 0.10,
+                d: 0.05,
+                power: 0.80,
+                incidence: 5.94 / 100000,
+                specificity: 0.994,
+                spec_floor: 0.990,
+                // Detection params
+                det_incidence: 12 / 100000,
+                det_sensitivity: 0.17,
+                det_method: 'poisson' // 'poisson' or 'binomial'
+            });
+
+            const handleChange = (e) => {
+                const { name, value } = e.target;
+                setParams(prev => ({
+                    ...prev,
+                    [name]: (name === 'det_method') ? value : parseFloat(value)
+                }));
+            };
+
+            const results = useMemo(() => {
+                if (mode === 'comprehensive') {
+                    const { p_exp, p_min, d, alpha, power, incidence, specificity, spec_floor } = params;
+                    const a2 = alpha / 2; // Tail area for 95% CI (0.025)
+
+                    // 1. Bare Minimum (Floor)
+                    // Ensuring the lower bound of the 95% CI is >= p_min
+                    let n_floor = 1;
+                    while (wilson_lb(n_floor, p_exp, a2) < p_min && n_floor < 100000) { n_floor++; }
+
+                    // 2. Power to beat the Floor
+                    // Ensuring 80% power that the lower bound of the 95% CI is >= p_min
+                    const z_alpha_half = qnorm(1 - a2); // 1.96 for alpha=0.05
+                    const z_power = qnorm(power);      // 0.84 for power=0.80
+                    const n_power_beat_floor = Math.ceil(Math.pow(((z_alpha_half * Math.sqrt(p_min * (1 - p_min)) + 
+                                                    z_power * Math.sqrt(p_exp * (1 - p_exp))) / (p_exp - p_min)), 2));
+
+                    // 3. Precision (Wilson-based +/- d)
+                    let n_precision_wilson = 1;
+                    while (wilson_precision(n_precision_wilson, p_exp, a2) > d && n_precision_wilson < 100000) {
+                        n_precision_wilson++;
+                    }
+
+                    // 4. Powered Precision
+                    let n_powered_precision_wilson = 1;
+                    while (true) {
+                        // For precision, the worst case (widest interval) is when p is closer to 0.5.
+                        // Since p_exp is usually < 0.5, the "worst" p is p_exp + z_power * SE.
+                        const se = Math.sqrt((p_exp * (1 - p_exp)) / n_powered_precision_wilson);
+                        const p_worst = Math.min(0.9999, p_exp + z_power * se);
+                        
+                        if (wilson_precision(n_powered_precision_wilson, p_worst, a2) <= d) break;
+                        n_powered_precision_wilson++;
+                        if (n_powered_precision_wilson > 100000) break;
+                    }
+
+                    // 5. Specificity Floor
+                    let n_spec_check = 1;
+                    while (wilson_lb(n_spec_check, specificity, a2) < spec_floor && n_spec_check < 100000) {
+                        n_spec_check++;
+                    }
+
+                    // PPV Calculation
+                    const ppv = (p_exp * incidence) / (p_exp * incidence + (1 - specificity) * (1 - incidence));
+
+                    const scenarios = [
+                        { name: "1. Bare Minimum (Floor)", cases: n_floor },
+                        { name: "2. Power vs. Floor", cases: n_power_beat_floor },
+                        { name: "3. Wilson Precision (+/- " + (d * 100).toFixed(1) + "%)", cases: n_precision_wilson },
+                        { name: "4. Powered Wilson Precision", cases: n_powered_precision_wilson }
+                    ];
+
+                    const processedScenarios = scenarios.map(s => ({
+                        ...s,
+                        totalScreen: Math.ceil(s.cases / incidence)
+                    }));
+
+                    return {
+                        processedScenarios,
+                        n_spec_check,
+                        ppv
+                    };
+                } else {
+                    // Detection mode
+                    const { det_incidence, det_sensitivity, alpha, det_method } = params;
+                    const p_true_positive = det_incidence * det_sensitivity;
+                    
+                    const n_poisson = Math.ceil(-Math.log(alpha) / p_true_positive);
+                    const n_binomial = Math.ceil(Math.log(alpha) / Math.log(1 - p_true_positive));
+                    
+                    return {
+                        p_true_positive,
+                        n_poisson,
+                        n_binomial,
+                        confidence: (1 - alpha) * 100
+                    };
+                }
+            }, [params, mode]);
+
+            // Re-run Lucide icons when mode changes
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [mode]);
+
+            return (
+                <div className="max-w-6xl mx-auto px-4 py-8">
+                    <header className="mb-8 text-center">
+                        <h1 className="text-3xl font-bold text-slate-900 mb-2">Diagnostic Statistics Calculator</h1>
+                        <p className="text-slate-600">Interactive tool for clinical trial planning and screening estimation</p>
+                    </header>
+
+                    {/* Mode Switcher */}
+                    <div className="flex justify-center mb-10">
+                        <div className="bg-slate-200 p-1 rounded-xl flex gap-1">
+                            <button 
+                                onClick={() => setMode('comprehensive')}
+                                className={`px-6 py-2 rounded-lg font-medium transition-all ${mode === 'comprehensive' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                            >
+                                Comprehensive Sample Size
+                            </button>
+                            <button 
+                                onClick={() => setMode('detection')}
+                                className={`px-6 py-2 rounded-lg font-medium transition-all ${mode === 'detection' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                            >
+                                1-Case Detection
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* Parameters Panel */}
+                        <div className="lg:col-span-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                            <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
+                                <i data-lucide="settings-2" className="w-5 h-5 text-blue-600"></i>
+                                Parameters
+                            </h2>
+                            
+                            <div className="space-y-4">
+                                {mode === 'comprehensive' ? (
+                                    <React.Fragment>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Alpha (e.g., 0.05 for 95% CI)</label>
+                                            <input type="number" step="0.001" name="alpha" value={params.alpha} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Sensitivity (p_exp)</label>
+                                            <input type="number" step="0.001" name="p_exp" value={params.p_exp} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Minimal Floor (p_min)</label>
+                                            <input type="number" step="0.001" name="p_min" value={params.p_min} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Expected Specificity</label>
+                                            <input type="number" step="0.001" name="specificity" value={params.specificity} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Specificity Floor</label>
+                                            <input type="number" step="0.001" name="spec_floor" value={params.spec_floor} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Margin of Error (d)</label>
+                                            <input type="number" step="0.001" name="d" value={params.d} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Power (Surety)</label>
+                                            <input type="number" step="0.01" name="power" value={params.power} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Prevalence (Incidence)</label>
+                                            <input type="number" step="0.000001" name="incidence" value={params.incidence} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                    </React.Fragment>
+                                ) : (
+                                    <React.Fragment>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Alpha (Error rate)</label>
+                                            <input type="number" step="0.001" name="alpha" value={params.alpha} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Sensitivity</label>
+                                            <input type="number" step="0.001" name="det_sensitivity" value={params.det_sensitivity} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Prevalence (Incidence)</label>
+                                            <input type="number" step="0.000001" name="det_incidence" value={params.det_incidence} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Distribution Method</label>
+                                            <select name="det_method" value={params.det_method} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white">
+                                                <option value="poisson">Poisson (Recommended)</option>
+                                                <option value="binomial">Exact Binomial</option>
+                                            </select>
+                                        </div>
+                                    </React.Fragment>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Results Panel */}
+                        <div className="lg:col-span-2 space-y-8">
+                            {mode === 'comprehensive' ? (
+                                <React.Fragment>
+                                    {/* Key Metrics */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="bg-blue-600 p-6 rounded-2xl text-white shadow-lg relative overflow-hidden group">
+                                            <div className="absolute -right-4 -top-4 text-blue-500 opacity-20 transition-transform group-hover:scale-110 duration-500">
+                                                <i data-lucide="trending-up" className="w-24 h-24"></i>
+                                            </div>
+                                            <div className="relative z-10">
+                                                <div className="text-blue-100 text-sm font-medium mb-1">Positive Predictive Value (PPV)</div>
+                                                <div className="text-3xl font-bold">{(results.ppv * 100).toFixed(4)}%</div>
+                                                <div className="mt-2 text-xs text-blue-200">Probability that those with a positive test actually have the disease.</div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-emerald-600 p-6 rounded-2xl text-white shadow-lg relative overflow-hidden group">
+                                            <div className="absolute -right-4 -top-4 text-emerald-500 opacity-20 transition-transform group-hover:scale-110 duration-500">
+                                                <i data-lucide="users" className="w-24 h-24"></i>
+                                            </div>
+                                            <div className="relative z-10">
+                                                <div className="text-emerald-100 text-sm font-medium mb-1">Healthy Controls Needed</div>
+                                                <div className="text-3xl font-bold">{results.n_spec_check.toLocaleString()}</div>
+                                                <div className="mt-2 text-xs text-emerald-200">To ensure Specificity &gt; {(params.spec_floor * 100).toFixed(1)}% at {(100 - params.alpha * 100)}% confidence.</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Scenarios Table */}
+                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                        <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                                            <h3 className="text-xl font-semibold">Final Metrics by Scenario</h3>
+                                            <div className="flex items-center gap-2 text-xs text-slate-500">
+                                                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-600 rounded-full"></span> Screening Target</span>
+                                            </div>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left">
+                                                <thead className="bg-slate-50 text-slate-600 text-sm font-medium uppercase tracking-wider">
+                                                    <tr>
+                                                        <th className="px-6 py-4">Scenario</th>
+                                                        <th className="px-6 py-4 text-right">Required Cases</th>
+                                                        <th className="px-6 py-4 text-right">Total Screens</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {results.processedScenarios.map((s, idx) => (
+                                                        <tr key={idx} className={`hover:bg-slate-50 transition-colors ${idx === 3 ? 'bg-blue-50/50' : ''}`}>
+                                                            <td className="px-6 py-4">
+                                                                <div className="font-medium text-slate-800">{s.name}</div>
+                                                                <div className="text-xs text-slate-500 mt-0.5">
+                                                                    {idx === 0 && "Minimum cases to meet floor requirement"}
+                                                                    {idx === 1 && "Cases needed for statistical power vs floor"}
+                                                                    {idx === 2 && "Cases needed for desired precision (CI width)"}
+                                                                    {idx === 3 && "Highest rigor: Precision powered at " + (params.power * 100) + "% surety"}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-6 py-4 text-right text-slate-600 tabular-nums">{s.cases.toLocaleString()}</td>
+                                                            <td className="px-6 py-4 text-right font-semibold text-slate-900 tabular-nums">
+                                                                <span className={idx === 3 ? 'text-blue-600' : ''}>
+                                                                    {s.totalScreen.toLocaleString()}
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div className="p-6 bg-slate-50 border-t border-slate-200">
+                                            <div className="flex items-start gap-3">
+                                                <div className="bg-blue-100 p-2 rounded-lg">
+                                                    <i data-lucide="award" className="w-5 h-5 text-blue-600"></i>
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-900">Final Recommendation:</p>
+                                                    <p className="text-sm text-slate-600 mt-1">To achieve <span className="font-bold text-slate-900">Powered Wilson Precision</span> (Scenario 4), you should aim to screen <span className="text-blue-600 font-bold text-lg">{results.processedScenarios[3].totalScreen.toLocaleString()}</span> individuals based on the current prevalence of <span className="font-medium text-slate-800">{(params.incidence * 100).toFixed(6)}%</span>.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </React.Fragment>
+                            ) : (
+                                <React.Fragment>
+                                    {/* Key Metrics for Detection */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="bg-indigo-600 p-6 rounded-2xl text-white shadow-lg relative overflow-hidden group">
+                                            <div className="absolute -right-4 -top-4 text-indigo-500 opacity-20 transition-transform group-hover:scale-110 duration-500">
+                                                <i data-lucide="target" className="w-24 h-24"></i>
+                                            </div>
+                                            <div className="relative z-10">
+                                                <div className="text-indigo-100 text-sm font-medium mb-1">True Positive Rate</div>
+                                                <div className="text-3xl font-bold">{(results.p_true_positive * 100).toFixed(8)}%</div>
+                                                <div className="mt-2 text-xs text-indigo-200">Probability of detecting a case in a single screen.</div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-violet-600 p-6 rounded-2xl text-white shadow-lg relative overflow-hidden group">
+                                            <div className="absolute -right-4 -top-4 text-violet-500 opacity-20 transition-transform group-hover:scale-110 duration-500">
+                                                <i data-lucide="check-circle" className="w-24 h-24"></i>
+                                            </div>
+                                            <div className="relative z-10">
+                                                <div className="text-violet-100 text-sm font-medium mb-1">Confidence Level</div>
+                                                <div className="text-3xl font-bold">{results.confidence}%</div>
+                                                <div className="mt-2 text-xs text-violet-200">Probability of detecting at least 1 case.</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Detection Result Card */}
+                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                        <div className="p-8 text-center border-b border-slate-100">
+                                            <h3 className="text-slate-500 font-medium mb-2 uppercase tracking-wider text-sm">Required Sample Size</h3>
+                                            <div className="text-6xl font-bold text-slate-900 mb-4 tabular-nums">
+                                                {params.det_method === 'poisson' ? results.n_poisson.toLocaleString() : results.n_binomial.toLocaleString()}
+                                            </div>
+                                            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-slate-100 text-slate-700 rounded-full text-sm font-medium">
+                                                <i data-lucide={params.det_method === 'poisson' ? "zap" : "box"} className="w-4 h-4"></i>
+                                                {params.det_method === 'poisson' ? "Poisson Approximation" : "Exact Binomial Method"}
+                                            </div>
+                                        </div>
+                                        <div className="p-6 bg-slate-50 flex flex-col md:flex-row gap-6 justify-around border-t border-slate-100">
+                                            <div className="text-center">
+                                                <div className="text-xs text-slate-500 mb-1 uppercase">Poisson Method</div>
+                                                <div className="font-semibold text-slate-700">{results.n_poisson.toLocaleString()}</div>
+                                            </div>
+                                            <div className="text-center border-t md:border-t-0 md:border-l border-slate-200 pt-4 md:pt-0 md:pl-6">
+                                                <div className="text-xs text-slate-500 mb-1 uppercase">Exact Binomial</div>
+                                                <div className="font-semibold text-slate-700">{results.n_binomial.toLocaleString()}</div>
+                                            </div>
+                                        </div>
+                                        <div className="p-6 bg-blue-50 border-t border-blue-100">
+                                            <div className="flex items-start gap-3">
+                                                <div className="bg-blue-600 p-2 rounded-lg">
+                                                    <i data-lucide="info" className="w-5 h-5 text-white"></i>
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-semibold text-blue-900">Interpretation:</p>
+                                                    <p className="text-sm text-blue-800 mt-1">
+                                                        To be <span className="font-bold">{results.confidence}% confident</span> that you will detect <span className="font-bold text-blue-900">at least 1 true positive case</span>, you need to screen a total of <span className="font-bold text-blue-900">{params.det_method === 'poisson' ? results.n_poisson.toLocaleString() : results.n_binomial.toLocaleString()}</span> individuals.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </React.Fragment>
+                            )}
+
+                            {/* Educational Section */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                    <h4 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                                        <i data-lucide="book-open" className="w-4 h-4 text-slate-400"></i>
+                                        {mode === 'comprehensive' ? "PPV Formula" : "Poisson Approximation"}
+                                    </h4>
+                                    <div className="bg-slate-50 p-4 rounded-xl font-mono text-sm text-slate-700 overflow-x-auto">
+                                        {mode === 'comprehensive' 
+                                            ? "PPV = (Sens × Prev) / [ (Sens × Prev) + (1 - Spec) × (1 - Prev) ]"
+                                            : "n = -ln(α) / (Prevalence × Sensitivity)"
+                                        }
+                                    </div>
+                                    <p className="mt-3 text-xs text-slate-500 leading-relaxed">
+                                        {mode === 'comprehensive' 
+                                            ? "The Positive Predictive Value (PPV) depends heavily on the prevalence of the condition. In low-prevalence scenarios, even high-specificity tests can result in low PPV."
+                                            : "The Poisson method is a highly accurate approximation for rare events (low prevalence). It provides the sample size needed to ensure the probability of seeing zero cases is less than alpha."
+                                        }
+                                    </p>
+                                </div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                    <h4 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                                        <i data-lucide="shield-check" className="w-4 h-4 text-slate-400"></i>
+                                        {mode === 'comprehensive' ? "Wilson Score Interval" : "Binomial Probability"}
+                                    </h4>
+                                    <p className="text-xs text-slate-500 leading-relaxed">
+                                        {mode === 'comprehensive' 
+                                            ? "This calculator uses the Wilson Score Interval for binomial proportions, which is more robust than the standard Wald (normal) approximation, especially for proportions near 0 or 1 or small sample sizes."
+                                            : "The Exact Binomial method calculates the probability of detection using (1 - (1-p)^n). This is the mathematically precise way to determine the sample size for discrete screening events."
+                                        }
+                                    </p>
+                                    <div className="mt-4 flex items-center gap-4">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                                            <span className="text-[10px] font-medium text-slate-600">Robust</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                            <span className="text-[10px] font-medium text-slate-600">Accurate</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        
+        // Initialize Lucide icons after React renders
+        setTimeout(() => {
+            if (window.lucide) {
+                window.lucide.createIcons();
+            }
+        }, 100);
+    </script>
+</body>
+</html>
