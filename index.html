@@ -154,12 +154,36 @@
             return Math.max(p - lb, ub - p);
         }
 
+        function clopper_pearson_bounds_from_x(n, x, a) {
+            let lb = 0, ub = 1;
+            if (x > 0) {
+                let low = 0, high = x / n;
+                for (let i = 0; i < 30; i++) {
+                    const mid = (low + high) / 2;
+                    if (1 - binomialCDF(x - 1, n, mid) > a) high = mid;
+                    else low = mid;
+                }
+                lb = low;
+            }
+            if (x < n) {
+                let low = x / n, high = 1;
+                for (let i = 0; i < 30; i++) {
+                    const mid = (low + high) / 2;
+                    if (binomialCDF(x, n, mid) > a) low = mid;
+                    else high = mid;
+                }
+                ub = low;
+            }
+            return { lb, ub };
+        }
+
         const App = () => {
             const [mode, setMode] = useState('power');
             const [params, setParams] = useState({
                 p0: 0.85, p1: 0.92, alpha1: 0.05, sides1: 1, power: 0.80,
                 p_exp: 0.90, d: 0.05, alpha2: 0.05, sides2: 2, method2: 'wilson',
-                n_cases_step2: 100, prevalence: 0.10, expected_sens3: 0.90, expected_spec: 0.95, spec_lower_bound: 0.90, alpha3: 0.05, sides3: 1
+                n_cases_step2: 100, prevalence: 0.10, expected_sens3: 0.90, expected_spec: 0.95, spec_lower_bound: 0.90, alpha3: 0.05, sides3: 1,
+                x4: 90, n4: 100
             });
 
             const handleChange = (e) => {
@@ -190,7 +214,7 @@
                         maxN: 100000
                     });
                     return { n_wald, n_wilson, n_cp, final_n: method2 === 'wald' ? n_wald : method2 === 'wilson' ? n_wilson : n_cp };
-                } else {
+                } else if (mode === 'realworld') {
                     const { n_cases_step2, prevalence, expected_sens3, expected_spec, spec_lower_bound, alpha3, sides3 } = params;
                     const a_tail = getAlphaTail(alpha3, sides3);
                     const n_total_for_cases = Math.ceil(n_cases_step2 / prevalence);
@@ -204,6 +228,22 @@
                     const ppv = ppvDen > 0 ? (expected_sens3 * prevalence) / ppvDen : 0;
                     const npv = npvDen > 0 ? (expected_spec * (1 - prevalence)) / npvDen : 0;
                     return { n_total: Math.max(n_total_for_cases, n_total_for_spec), n_healthy_needed, n_diseased_needed: n_cases_step2, n_total_for_cases, n_total_for_spec, ppv, npv };
+                } else {
+                    const alpha = 0.05;
+                    const a_tail = alpha / 2;
+                    const n = Math.max(1, Math.floor(params.n4 || 1));
+                    const x = Math.max(0, Math.min(n, Math.floor(params.x4 || 0)));
+                    const pHat = x / n;
+                    const z = qnorm(1 - a_tail);
+
+                    const waldHalf = z * Math.sqrt((pHat * (1 - pHat)) / n);
+                    const wald = {
+                        lb: Math.max(0, pHat - waldHalf),
+                        ub: Math.min(1, pHat + waldHalf)
+                    };
+                    const wilson = wilson_bounds(n, pHat, a_tail);
+                    const cp = clopper_pearson_bounds_from_x(n, x, a_tail);
+                    return { x, n, pHat, wald, wilson, cp };
                 }
             }, [params, mode]);
 
@@ -218,9 +258,9 @@
 
                     <div className="flex justify-center mb-10">
                         <div className="bg-slate-200 p-1 rounded-xl flex flex-wrap gap-1">
-                            {['power', 'precision', 'realworld'].map((m, idx) => (
+                            {['power', 'precision', 'realworld', 'ci'].map((m, idx) => (
                                 <button key={m} type="button" onClick={() => setMode(m)} className={`px-4 py-2 rounded-lg font-medium transition-all ${mode === m ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
-                                    {idx + 1}. {m === 'power' ? 'Binomial Power' : m === 'precision' ? 'Sensitivity Precision' : 'Real-world Settings'}
+                                    {idx + 1}. {m === 'power' ? 'Binomial Power' : m === 'precision' ? 'Sensitivity Precision' : m === 'realworld' ? 'Real-world Settings' : '95% CI for Proportion'}
                                 </button>
                             ))}
                         </div>
@@ -261,6 +301,13 @@
                                         <div><label className="block text-sm font-medium text-slate-700 mb-1">Sides</label><select name="sides3" value={params.sides3} onChange={handleChange} className="w-full px-3 py-2 border rounded-lg bg-white"><option value={1}>1-sided</option><option value={2}>2-sided</option></select></div>
                                     </>
                                 )}
+                                {mode === 'ci' && (
+                                    <>
+                                        <div><label className="block text-sm font-medium text-slate-700 mb-1">Successes (X)</label><input type="number" name="x4" value={params.x4} onChange={handleChange} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                        <div><label className="block text-sm font-medium text-slate-700 mb-1">Total (N)</label><input type="number" name="n4" value={params.n4} onChange={handleChange} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                        <div className="text-xs text-slate-500">This tab reports two-sided 95% confidence intervals from X/N.</div>
+                                    </>
+                                )}
                             </div>
                         </div>
 
@@ -269,7 +316,7 @@
                                 <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center">
                                     <h3 className="text-slate-500 font-medium mb-2 uppercase text-sm">Required Sample Size (n)</h3>
                                     <div className="text-7xl font-bold text-blue-600 mb-4 tabular-nums">{results.n.toLocaleString()}</div>
-                                    <p className="text-slate-600">To achieve {(params.power * 100).toFixed(0)}% power at α = {params.alpha1}.</p>
+                                    <p className="text-slate-600">To achieve {(params.power * 100).toFixed(1)}% power at α = {params.alpha1}.</p>
                                 </div>
                             )}
                             {mode === 'precision' && (
@@ -317,13 +364,39 @@
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="bg-slate-50 p-6 rounded-2xl border">
                                             <div className="text-xs text-slate-500 uppercase mb-2">PPV</div>
-                                            <div className="text-3xl font-bold text-indigo-600 tabular-nums">{(results.ppv * 100).toFixed(2)}%</div>
+                                            <div className="text-3xl font-bold text-indigo-600 tabular-nums">{(results.ppv * 100).toFixed(1)}%</div>
                                             <p className="text-xs text-slate-500 mt-2">Computed from sensitivity, specificity, and prevalence.</p>
                                         </div>
                                         <div className="bg-slate-50 p-6 rounded-2xl border">
                                             <div className="text-xs text-slate-500 uppercase mb-2">NPV</div>
-                                            <div className="text-3xl font-bold text-indigo-600 tabular-nums">{(results.npv * 100).toFixed(2)}%</div>
+                                            <div className="text-3xl font-bold text-indigo-600 tabular-nums">{(results.npv * 100).toFixed(1)}%</div>
                                             <p className="text-xs text-slate-500 mt-2">Computed from sensitivity, specificity, and prevalence.</p>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            {mode === 'ci' && (
+                                <>
+                                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center">
+                                        <h3 className="text-slate-500 font-medium mb-2 uppercase text-sm">Observed Proportion</h3>
+                                        <div className="text-6xl font-bold text-sky-600 mb-2 tabular-nums">{(results.pHat * 100).toFixed(1)}%</div>
+                                        <p className="text-slate-600">From {results.x.toLocaleString()} / {results.n.toLocaleString()} (95% CI methods below)</p>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="bg-slate-50 p-5 rounded-xl border">
+                                            <div className="text-xs text-slate-500 uppercase">Wald CI</div>
+                                            <div className="text-lg font-bold tabular-nums mt-2">{(results.wald.lb * 100).toFixed(1)}% - {(results.wald.ub * 100).toFixed(1)}%</div>
+                                            <p className="text-xs text-slate-500 mt-2">Use mainly for quick approximation when N is large and p is not near 0 or 1.</p>
+                                        </div>
+                                        <div className="bg-slate-50 p-5 rounded-xl border">
+                                            <div className="text-xs text-slate-500 uppercase">Wilson CI</div>
+                                            <div className="text-lg font-bold tabular-nums mt-2">{(results.wilson.lb * 100).toFixed(1)}% - {(results.wilson.ub * 100).toFixed(1)}%</div>
+                                            <p className="text-xs text-slate-500 mt-2">✨ Recommended default in most practical settings; better coverage than Wald.</p>
+                                        </div>
+                                        <div className="bg-slate-50 p-5 rounded-xl border">
+                                            <div className="text-xs text-slate-500 uppercase">Clopper-Pearson CI</div>
+                                            <div className="text-lg font-bold tabular-nums mt-2">{(results.cp.lb * 100).toFixed(1)}% - {(results.cp.ub * 100).toFixed(1)}%</div>
+                                            <p className="text-xs text-slate-500 mt-2">Use when you need an exact (conservative) binomial confidence interval.</p>
                                         </div>
                                     </div>
                                 </>
